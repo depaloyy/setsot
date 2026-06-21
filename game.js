@@ -185,6 +185,8 @@ const G = {
   busy           : false,  // prevents double-clicks while AI plays
 };
 
+let aiTimeoutId = null;
+
 /* ---------- Init ---------- */
 function initGame() {
   _nextId = 0;
@@ -197,6 +199,11 @@ function initGame() {
   G.selectedIds   = new Set();
   G.logs          = [];
   G.busy          = false;
+  
+  if (aiTimeoutId) {
+    clearTimeout(aiTimeoutId);
+    aiTimeoutId = null;
+  }
 
   // Create players
   G.players = [];
@@ -492,10 +499,6 @@ function executePlay(playerIdx, cards) {
     if (!G.winners.includes(playerIdx)) {
       G.winners.push(playerIdx);
       addLog(`<strong>${player.name}</strong> selesai! (Juara ${G.winners.length})`);
-      
-      if (playerIdx === 0 && G.winners.length < G.numPlayers - 1) {
-         showHumanWinOverlay(G.winners.length);
-      }
     }
 
     if (G.winners.length >= G.numPlayers - 1) {
@@ -504,8 +507,17 @@ function executePlay(playerIdx, cards) {
       }
       G.gameOver = true;
       renderGame();
-      showGameOver();
+      
+      if (playerIdx === 0) {
+        showHumanWinOverlay(G.winners.indexOf(0) + 1);
+      } else {
+        showGameOver();
+      }
       return;
+    } else {
+      if (playerIdx === 0) {
+         showHumanWinOverlay(G.winners.indexOf(0) + 1);
+      }
     }
   }
 
@@ -606,7 +618,9 @@ function scheduleTurn() {
     updateButtons();
     $('game-status').innerHTML = `Giliran: ${p.name} <span class="thinking">Memilih kartu</span>`;
     const delay = 1500 + Math.floor(Math.random() * 1500); // 1.5s to 3.0s delay
-    setTimeout(() => {
+    
+    if (aiTimeoutId) clearTimeout(aiTimeoutId);
+    aiTimeoutId = setTimeout(() => {
       G.busy = false;
       performAITurn();
     }, delay);
@@ -972,6 +986,16 @@ function addLog(msg) {
 function showHumanWinOverlay(rank) {
   $('human-win-title').textContent = `Kamu Juara ${rank}!`;
   playSound('win');
+  
+  const isGameOver = G.winners.length >= G.numPlayers - 1;
+  if (isGameOver) {
+    $('human-win-desc').textContent = 'Selamat, kartumu telah habis! Kamu berhasil memenangkan permainan.';
+    $('btn-watch').style.display = 'none';
+  } else {
+    $('human-win-desc').textContent = 'Selamat, kartumu telah habis! Para Bot masih bertarung memperebutkan sisa posisi.';
+    $('btn-watch').style.display = 'block';
+  }
+  
   $('human-win-overlay').classList.remove('hidden');
 }
 
@@ -1208,6 +1232,7 @@ function setupListeners() {
     $('table-pattern').textContent = '';
     $('table-label').textContent = 'Meja kosong — mainkan kartu';
     $('hand-count').textContent = '0 kartu';
+    $('game-status').textContent = 'Mengocok kartu...';
     
     playSound('deal');
     initGame();
@@ -1235,6 +1260,7 @@ function setupListeners() {
     $('table-pattern').textContent = '';
     $('table-label').textContent = 'Meja kosong — mainkan kartu';
     $('hand-count').textContent = '0 kartu';
+    $('game-status').textContent = 'Mengocok kartu...';
     
     initGame();
     await showDealAnimation();
