@@ -492,6 +492,10 @@ function executePlay(playerIdx, cards) {
     if (!G.winners.includes(playerIdx)) {
       G.winners.push(playerIdx);
       addLog(`<strong>${player.name}</strong> selesai! (Juara ${G.winners.length})`);
+      
+      if (playerIdx === 0 && G.winners.length < G.numPlayers - 1) {
+         showHumanWinOverlay(G.winners.length);
+      }
     }
 
     if (G.winners.length >= G.numPlayers - 1) {
@@ -965,10 +969,16 @@ function addLog(msg) {
   G.logs.push(msg);
 }
 
+function showHumanWinOverlay(rank) {
+  $('human-win-title').textContent = `Kamu Juara ${rank}!`;
+  playSound('win');
+  $('human-win-overlay').classList.remove('hidden');
+}
+
 function showGameOver() {
   $('gameover-overlay').classList.remove('hidden');
   const title = $('gameover-title');
-  const desc  = $('gameover-sub');
+  const desc  = $('gameover-desc');
 
   let html = '';
   for(let i=0; i<G.winners.length; i++) {
@@ -1234,6 +1244,15 @@ function setupListeners() {
 
   $('btn-restart').addEventListener('click', restartGame);
   $('btn-skip').addEventListener('click', restartGame);
+  
+  // Mid-game human win buttons
+  $('btn-watch').addEventListener('click', () => {
+    $('human-win-overlay').classList.add('hidden');
+  });
+  $('btn-next-game').addEventListener('click', () => {
+    $('human-win-overlay').classList.add('hidden');
+    restartGame();
+  });
 
   // Play / Pass
   $('btn-play').addEventListener('click', playerPlay);
