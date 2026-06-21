@@ -91,9 +91,39 @@ function detectPattern(cards) {
   if (n === 2 && cards.every(c => !c.isJoker) && cards[0].rank === cards[1].rank)
     return { type:'DOUBLE', value: cards[0].value, cards: sorted };
 
-  /* ---- Triple ---- */
-  if (n === 3 && cards.every(c => !c.isJoker && c.rank === cards[0].rank))
-    return { type:'TRIPLE', value: cards[0].value, cards: sorted };
+  /* ---- Double Triple ---- */
+  if (n === 6 && cards.every(c => !c.isJoker)) {
+    const vals = sorted.map(c => c.value);
+    const unique = [...new Set(vals)];
+    if (unique.length === 2) {
+      const count1 = vals.filter(v => v === unique[0]).length;
+      const count2 = vals.filter(v => v === unique[1]).length;
+      if (count1 === 3 && count2 === 3) {
+         const highValue = Math.max(unique[0], unique[1]);
+         return { type: 'DOUBLE_TRIPLE', highValue, cards: sorted };
+      }
+    }
+  }
+
+  /* ---- Double Straight ---- */
+  if (n >= 10 && n % 2 === 0 && cards.every(c => !c.isJoker && c.rank !== '2')) {
+    const vals = sorted.map(c => c.value);
+    let isPairs = true;
+    const pairs = [];
+    for(let i=0; i<n; i+=2) {
+      if (vals[i] !== vals[i+1]) { isPairs = false; break; }
+      pairs.push(vals[i]);
+    }
+    if (isPairs) {
+      let isConsecutive = true;
+      for (let i = 1; i < pairs.length; i++) {
+        if (pairs[i] !== pairs[i-1] + 1) { isConsecutive = false; break; }
+      }
+      if (isConsecutive) {
+        return { type: 'DOUBLE_STRAIGHT', length: n, highValue: pairs[pairs.length - 1], cards: sorted };
+      }
+    }
+  }
 
   /* ---- Kawal (Full House 3+2) ---- */
   if (n === 5 && cards.every(c => !c.isJoker)) {
@@ -158,7 +188,8 @@ function canBeat(np, ep) {
   switch (np.type) {
     case 'SINGLE':   return np.value > ep.value;
     case 'DOUBLE':   return np.value > ep.value;
-    case 'TRIPLE':   return np.value > ep.value;
+    case 'DOUBLE_TRIPLE': return np.highValue > ep.highValue;
+    case 'DOUBLE_STRAIGHT': return np.length === ep.length && np.highValue > ep.highValue;
     case 'STRAIGHT': return np.length === ep.length && np.highValue > ep.highValue;
     case 'KAWAL':    return np.tripleValue > ep.tripleValue && np.pairValue > ep.pairValue;
     default:         return false;
@@ -315,6 +346,73 @@ function findAllKawals(hand) {
   return res;
 }
 
+function findAllDoubleTriples(hand) {
+  const nonJ = hand.filter(c => !c.isJoker);
+  const groups = groupByValue(nonJ);
+  const triples = groups.filter(([, cs]) => cs.length >= 3);
+  const res = [];
+  for (let i = 0; i < triples.length; i++) {
+    for (let j = i + 1; j < triples.length; j++) {
+      res.push([...triples[i][1].slice(0, 3), ...triples[j][1].slice(0, 3)]);
+    }
+  }
+  return res;
+}
+
+function findDoubleStraightsOfLength(hand, numPairs) {
+  const elig = hand.filter(c => !c.isJoker && c.rank !== '2');
+  const byVal = {};
+  elig.forEach(c => { if (!byVal[c.value]) byVal[c.value] = []; byVal[c.value].push(c); });
+  
+  const pairVals = Object.keys(byVal).map(Number).filter(v => byVal[v].length >= 2).sort((a,b) => a-b);
+  const res = [];
+  
+  for (let s = 0; s <= pairVals.length - numPairs; s++) {
+    let ok = true;
+    for (let i = 1; i < numPairs; i++) {
+      if (pairVals[s + i] !== pairVals[s] + i) { ok = false; break; }
+    }
+    if (ok) {
+      const cards = [];
+      for (let i = 0; i < numPairs; i++) {
+        const v = pairVals[s + i];
+        cards.push(byVal[v][0], byVal[v][1]);
+      }
+      res.push(cards);
+    }
+  }
+  return res;
+}
+
+function findAllDoubleStraights(hand) {
+  const elig = hand.filter(c => !c.isJoker && c.rank !== '2');
+  const byVal = {};
+  elig.forEach(c => { if (!byVal[c.value]) byVal[c.value] = []; byVal[c.value].push(c); });
+  
+  const vals = Object.keys(byVal).map(Number).filter(v => byVal[v].length >= 2).sort((a,b) => a-b);
+  const res = [];
+  
+  let rs = 0;
+  for (let i = 1; i <= vals.length; i++) {
+    if (i === vals.length || vals[i] !== vals[i - 1] + 1) {
+      const runLen = i - rs;
+      if (runLen >= 5) {
+        for (let len = 5; len <= runLen; len++) {
+          for (let start = rs; start <= rs + runLen - len; start++) {
+            const cards = [];
+            for (let j = start; j < start + len; j++) {
+              cards.push(byVal[vals[j]][0], byVal[vals[j]][1]);
+            }
+            res.push(cards);
+          }
+        }
+      }
+      rs = i;
+    }
+  }
+  return res;
+}
+
 /* --- AI: opening play (no current pattern) --- */
 function aiOpeningPlay(hand) {
   if (hand.length === 0) return null;
@@ -333,8 +431,17 @@ function aiOpeningPlay(hand) {
   const groups  = groupByValue(nonJ);
   const r = Math.random();
 
-  // 15% chance: try straight (efficient card clearance)
+  // 15% chance: try double straight
   if (r < 0.15) {
+    const ds = findAllDoubleStraights(hand);
+    if (ds.length > 0) {
+      ds.sort((a, b) => a[0].value - b[0].value);
+      return ds[0];
+    }
+  }
+
+  // 25% chance: try straight
+  if (r < 0.25) {
     const ss = findAllStraights(hand);
     if (ss.length > 0) {
       ss.sort((a, b) => a[0].value - b[0].value);
@@ -342,8 +449,17 @@ function aiOpeningPlay(hand) {
     }
   }
 
-  // 10% chance: try kawal
-  if (r < 0.25) {
+  // 35% chance: try double triple
+  if (r < 0.35) {
+    const dt = findAllDoubleTriples(hand);
+    if (dt.length > 0) {
+       dt.sort((a, b) => Math.max(a[0].value, a[3].value) - Math.max(b[0].value, b[3].value));
+       return dt[0];
+    }
+  }
+
+  // 45% chance: try kawal
+  if (r < 0.45) {
     const kw = findAllKawals(hand);
     if (kw.length > 0) {
       kw.sort((a, b) => {
@@ -355,15 +471,8 @@ function aiOpeningPlay(hand) {
     }
   }
 
-  // 20% chance: try triple (don't break potential bombs — skip groups of 4+)
-  if (r < 0.45) {
-    for (const [, cs] of groups) {
-      if (cs.length === 3 && cs[0].value <= 9) return cs.slice(0, 3);
-    }
-  }
-
-  // 25% chance: try pair (don't break triples or bombs)
-  if (r < 0.70) {
+  // 65% chance: try pair
+  if (r < 0.65) {
     for (const [, cs] of groups) {
       if (cs.length === 2 && cs[0].value <= 9) return cs.slice(0, 2);
     }
@@ -398,12 +507,14 @@ function aiResponsePlay(hand, ep) {
         validPlays.push(cs.slice(0, 2));
   }
 
-  /* -- TRIPLE -- */
-  else if (ep.type === 'TRIPLE') {
-    const groups = groupByValue(hand.filter(c => !c.isJoker));
-    for (const [, cs] of groups)
-      if (cs.length >= 3 && cs[0].value > ep.value)
-        validPlays.push(cs.slice(0, 3));
+  /* -- DOUBLE TRIPLE -- */
+  else if (ep.type === 'DOUBLE_TRIPLE') {
+    const dts = findAllDoubleTriples(hand);
+    for (const dt of dts) {
+      const vals = [...new Set(dt.map(c => c.value))];
+      const high = Math.max(vals[0], vals[1]);
+      if (high > ep.highValue) validPlays.push(dt);
+    }
   }
 
   /* -- STRAIGHT -- */
@@ -412,6 +523,15 @@ function aiResponsePlay(hand, ep) {
     for (const s of ss)
       if (s[s.length - 1].value > ep.highValue)
         validPlays.push(s);
+  }
+
+  /* -- DOUBLE STRAIGHT -- */
+  else if (ep.type === 'DOUBLE_STRAIGHT') {
+    const pairsNeeded = ep.length / 2;
+    const dss = findDoubleStraightsOfLength(hand, pairsNeeded);
+    for (const ds of dss)
+      if (ds[ds.length - 1].value > ep.highValue)
+        validPlays.push(ds);
   }
 
   /* -- KAWAL -- */
@@ -905,8 +1025,12 @@ function patternLabel(pattern, cards) {
     }
     case 'DOUBLE':
       return `Double ${cards[0].rank}`;
-    case 'TRIPLE':
-      return `Triple ${cards[0].rank}`;
+    case 'DOUBLE_TRIPLE': {
+      const ranks = [...new Set(cards.map(c => c.rank))];
+      return `Double Triple ${ranks[0]} & ${ranks[1]}`;
+    }
+    case 'DOUBLE_STRAIGHT':
+      return `Seri Double ${cards.length / 2} pasang`;
     case 'STRAIGHT':
       return `Seri ${cards.map(c => c.rank).join('-')}`;
     case 'KAWAL': {
