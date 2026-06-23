@@ -39,7 +39,10 @@ function createDeck(numDecks) {
     for (const s of SUITS)
       for (const r of RANKS)
         d.push(mkCard(r, s, null));
+    // 4 jokers per deck: 2 black, 2 red
     d.push(mkCard(null, null, 'black'));
+    d.push(mkCard(null, null, 'black'));
+    d.push(mkCard(null, null, 'red'));
     d.push(mkCard(null, null, 'red'));
   }
   return d;
@@ -214,6 +217,9 @@ const G = {
   selectedIds    : null,   // Set<int> (human card selection)
   logs           : [],     // string[]
   busy           : false,  // prevents double-clicks while AI plays
+  difficulty     : 'normal', // easy | normal | hard
+  isFirstGame    : true,
+  previousWinnerIdx : 0,
 };
 
 let aiTimeoutId = null;
@@ -256,20 +262,104 @@ function initGame() {
     sortHand(G.players[i].hand);
   }
 
-  // First player: whoever has the lowest card (3♦ ideally)
-  let startIdx = 0;
-  let lowestVal = Infinity;
+  // First player determined later by 3-dump (first game) or previous winner (next game)
+  G.currentIdx      = 0;
+  G.roundLeaderIdx  = 0;
+
+  if (G.isFirstGame) {
+    addLog('Game baru! Semua pemain mengeluarkan kartu 3...');
+  } else {
+    addLog(`Game baru! ${G.players[G.previousWinnerIdx].name} jalan duluan (Juara 1 sebelumnya).`);
+    G.currentIdx = G.previousWinnerIdx;
+    G.roundLeaderIdx = G.previousWinnerIdx;
+  }
+}
+
+/* ---------- 3-Dump: opening showdown ---------- */
+const SUIT_RANK_3 = { '♠':3, '♥':2, '♣':1, '♦':0 };
+
+async function performThreeDump() {
+  // Collect all 3s from each player
+  const playerThrees = [];
+  let allThrees = [];
+  
   for (let i = 0; i < G.numPlayers; i++) {
-    const h = G.players[i].hand;
-    if (h.length > 0 && h[0].value < lowestVal) {
-      lowestVal = h[0].value;
+    const threes = G.players[i].hand.filter(c => !c.isJoker && c.rank === '3');
+    playerThrees.push(threes);
+    allThrees = allThrees.concat(threes);
+  }
+  
+  // If nobody has any 3s (very unlikely), just pick player 0
+  if (allThrees.length === 0) {
+    G.currentIdx = 0;
+    G.roundLeaderIdx = 0;
+    addLog('Tidak ada kartu 3! Kamu bermain pertama.');
+    renderGame();
+    return;
+  }
+  
+  // Show the 3s on the table
+  G.tableCards = allThrees;
+  
+  // Build label showing who has how many
+  const summaries = [];
+  for (let i = 0; i < G.numPlayers; i++) {
+    if (playerThrees[i].length > 0) {
+      const suits = playerThrees[i].map(c => c.suit).join('');
+      summaries.push(`${G.players[i].name}: ${playerThrees[i].length}× (${suits})`);
+    }
+  }
+  
+  // Determine winner
+  let startIdx = 0;
+  let bestCount = 0;
+  let bestMaxSuit = -1;
+  for (let i = 0; i < G.numPlayers; i++) {
+    const count = playerThrees[i].length;
+    const maxSuit = playerThrees[i].reduce((mx, c) => Math.max(mx, SUIT_RANK_3[c.suit] || 0), -1);
+    if (count > bestCount || (count === bestCount && maxSuit > bestMaxSuit)) {
+      bestCount = count;
+      bestMaxSuit = maxSuit;
       startIdx = i;
     }
   }
-  G.currentIdx      = startIdx;
-  G.roundLeaderIdx  = startIdx;   // will be set properly on first play
-
-  addLog(`Permainan dimulai! ${G.players[startIdx].name} bermain pertama.`);
+  
+  // Remove all 3s from all hands
+  for (let i = 0; i < G.numPlayers; i++) {
+    const threeIds = new Set(playerThrees[i].map(c => c.id));
+    G.players[i].hand = G.players[i].hand.filter(c => !threeIds.has(c.id));
+  }
+  
+  // Update display
+  $('table-label').textContent = 'Pembukaan: Semua kartu 3 dibuang!';
+  $('table-pattern').textContent = summaries.join(' | ');
+  $('game-status').textContent = `${G.players[startIdx].name} menang pembukaan!`;
+  
+  renderOpponents();
+  renderPlayerHand();
+  
+  // Animate the 3s onto the table
+  const cardsEl = $('table-cards');
+  cardsEl.innerHTML = '';
+  const sorted = [...allThrees].sort((a, b) => a.value - b.value || (SUIT_RANK_3[a.suit]||0) - (SUIT_RANK_3[b.suit]||0));
+  for (const c of sorted) {
+    cardsEl.appendChild(renderCardElement(c, false, false));
+  }
+  
+  playSound('play');
+  addLog(`Pembukaan kartu 3 — ${G.players[startIdx].name} menang! (${bestCount} kartu 3)`);
+  
+  // Wait so player can see the showdown
+  await _delay(2500);
+  
+  // Clear the table and start the real game
+  G.tableCards = [];
+  G.currentPattern = null;
+  G.currentIdx = startIdx;
+  G.roundLeaderIdx = startIdx;
+  
+  addLog(`— Putaran 1: ${G.players[startIdx].name} memulai —`);
+  renderGame();
 }
 
 /* ============================================================
@@ -430,9 +520,16 @@ function aiOpeningPlay(hand) {
   const nonJ   = hand.filter(c => !c.isJoker);
   const groups  = groupByValue(nonJ);
   const r = Math.random();
+  const diff = G.difficulty; // easy | normal | hard
 
-  // 15% chance: try double straight
-  if (r < 0.15) {
+  // Hard: higher chance for big combos; Easy: mostly singles/pairs
+  const pDoubleStraight = diff === 'hard' ? 0.25 : diff === 'easy' ? 0.05 : 0.15;
+  const pStraight       = diff === 'hard' ? 0.40 : diff === 'easy' ? 0.10 : 0.25;
+  const pDoubleTriple   = diff === 'hard' ? 0.50 : diff === 'easy' ? 0.15 : 0.35;
+  const pKawal          = diff === 'hard' ? 0.60 : diff === 'easy' ? 0.20 : 0.45;
+  const pPair           = diff === 'hard' ? 0.80 : diff === 'easy' ? 0.85 : 0.65;
+
+  if (r < pDoubleStraight) {
     const ds = findAllDoubleStraights(hand);
     if (ds.length > 0) {
       ds.sort((a, b) => a[0].value - b[0].value);
@@ -440,8 +537,7 @@ function aiOpeningPlay(hand) {
     }
   }
 
-  // 25% chance: try straight
-  if (r < 0.25) {
+  if (r < pStraight) {
     const ss = findAllStraights(hand);
     if (ss.length > 0) {
       ss.sort((a, b) => a[0].value - b[0].value);
@@ -449,8 +545,7 @@ function aiOpeningPlay(hand) {
     }
   }
 
-  // 35% chance: try double triple
-  if (r < 0.35) {
+  if (r < pDoubleTriple) {
     const dt = findAllDoubleTriples(hand);
     if (dt.length > 0) {
        dt.sort((a, b) => Math.max(a[0].value, a[3].value) - Math.max(b[0].value, b[3].value));
@@ -458,8 +553,7 @@ function aiOpeningPlay(hand) {
     }
   }
 
-  // 45% chance: try kawal
-  if (r < 0.45) {
+  if (r < pKawal) {
     const kw = findAllKawals(hand);
     if (kw.length > 0) {
       kw.sort((a, b) => {
@@ -471,8 +565,7 @@ function aiOpeningPlay(hand) {
     }
   }
 
-  // 65% chance: try pair
-  if (r < 0.65) {
+  if (r < pPair) {
     for (const [, cs] of groups) {
       if (cs.length === 2 && cs[0].value <= 9) return cs.slice(0, 2);
     }
@@ -569,10 +662,16 @@ function aiResponsePlay(hand, ep) {
     return sa - sb;
   });
 
-  // AI sometimes passes strategically (30% if only have very high cards)
+  // AI strategic pass based on difficulty
   const best = validPlays[0];
   const avgVal = best.reduce((s, c) => s + c.value, 0) / best.length;
-  if (avgVal >= 12 && hand.length > 4 && Math.random() < 0.30) return null;
+  const passChance = G.difficulty === 'hard' ? 0.40 : G.difficulty === 'easy' ? 0.10 : 0.30;
+  if (avgVal >= 12 && hand.length > 4 && Math.random() < passChance) return null;
+
+  // Hard: pick smartest play (save high cards); Easy: pick random
+  if (G.difficulty === 'easy' && validPlays.length > 1) {
+    return validPlays[Math.floor(Math.random() * validPlays.length)];
+  }
 
   return best;
 }
@@ -628,8 +727,10 @@ function executePlay(playerIdx, cards) {
       G.gameOver = true;
       renderGame();
       
-      if (playerIdx === 0) {
-        showHumanWinOverlay(G.winners.indexOf(0) + 1);
+      // Always show human-win overlay if human is anywhere in winners
+      const humanRank = G.winners.indexOf(0) + 1;
+      if (humanRank > 0) {
+        showHumanWinOverlay(humanRank);
       } else {
         showGameOver();
       }
@@ -753,7 +854,7 @@ function scheduleTurn() {
     anim.classList.remove('play');
     void anim.offsetWidth; // trigger reflow
     anim.classList.add('play');
-    playSound('deal');
+    playSound('yourTurn');
   }
 }
 
@@ -976,7 +1077,12 @@ function updateStatus() {
   const statusEl = $('game-status');
   const badgeEl  = $('round-badge');
   if (G.gameOver) {
-    statusEl.textContent = `${G.players[G.winner].name} menang!`;
+    if (G.winners && G.winners.length > 0) {
+      const winnerName = G.players[G.winners[0]].name;
+      statusEl.textContent = `Game selesai! Juara 1: ${winnerName}`;
+    } else {
+      statusEl.textContent = 'Game selesai!';
+    }
   } else {
     const p = G.players[G.currentIdx];
     statusEl.textContent = `Giliran: ${p.name}`;
@@ -1108,15 +1214,28 @@ function addLog(msg) {
 }
 
 function showHumanWinOverlay(rank) {
-  $('human-win-title').textContent = `Kamu Juara ${rank}!`;
-  playSound('win');
+  const isLoser = rank === G.numPlayers; // last place = loser
+  const isGameOver = G.gameOver;
   
-  const isGameOver = G.winners.length >= G.numPlayers - 1;
+  if (isLoser) {
+    $('human-win-title').textContent = 'Kamu Kalah!';
+    $('human-win-title').style.color = '#E5342E';
+    $('human-win-desc').textContent = 'Kamu adalah pemain terakhir yang masih memegang kartu. Coba lagi!';
+    playSound('error');
+  } else {
+    $('human-win-title').textContent = `Kamu Juara ${rank}!`;
+    $('human-win-title').style.color = '#30D158';
+    playSound('win');
+    if (isGameOver) {
+      $('human-win-desc').textContent = 'Selamat, kartumu telah habis! Kamu berhasil memenangkan permainan.';
+    } else {
+      $('human-win-desc').textContent = 'Selamat, kartumu telah habis! Para Bot masih bertarung memperebutkan sisa posisi.';
+    }
+  }
+  
   if (isGameOver) {
-    $('human-win-desc').textContent = 'Selamat, kartumu telah habis! Kamu berhasil memenangkan permainan.';
     $('btn-watch').style.display = 'none';
   } else {
-    $('human-win-desc').textContent = 'Selamat, kartumu telah habis! Para Bot masih bertarung memperebutkan sisa posisi.';
     $('btn-watch').style.display = 'block';
   }
   
@@ -1160,7 +1279,7 @@ function showGameOver() {
  * ============================================================ */
 
 function updateSettingInfo() {
-  const total    = G.numDecks * 54;
+  const total    = G.numDecks * 56;  // 52 + 4 jokers per deck
   const perPlayer = Math.floor(total / G.numPlayers);
   $('val-players').textContent = G.numPlayers;
   $('val-decks').textContent   = G.numDecks;
@@ -1301,6 +1420,18 @@ function playSound(type) {
         osc.start(now);
         osc.stop(now + 0.2);
         break;
+      case 'yourTurn':
+        // Ascending two-note chime
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(523, now);  // C5
+        osc.frequency.setValueAtTime(784, now + 0.12); // G5
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.25, now + 0.03);
+        gain.gain.setValueAtTime(0.2, now + 0.12);
+        gain.gain.linearRampToValueAtTime(0, now + 0.4);
+        osc.start(now);
+        osc.stop(now + 0.4);
+        break;
       case 'bomb':
         osc.type = 'square';
         osc.frequency.setValueAtTime(100, now);
@@ -1336,7 +1467,7 @@ function setupListeners() {
   // Start
   $('btn-start').addEventListener('click', async () => {
     // Validate: enough cards per player (minimum 5)
-    const total = G.numDecks * 54;
+    const total = G.numDecks * 56;
     const perPlayer = Math.floor(total / G.numPlayers);
     if (perPlayer < 5) {
       showToast('Kartu terlalu sedikit per pemain. Tambah dek atau kurangi pemain.');
@@ -1359,9 +1490,11 @@ function setupListeners() {
     $('game-status').textContent = 'Mengocok kartu...';
     
     playSound('deal');
+    G.isFirstGame = true;
     initGame();
     await showDealAnimation();
     renderGame();
+    await performThreeDump();
     scheduleTurn();
   });
 
@@ -1370,12 +1503,20 @@ function setupListeners() {
     G.gameOver = true;          // stop any pending AI
     $('game-screen').classList.remove('active');
     $('gameover-overlay').classList.add('hidden');
+    $('human-win-overlay').classList.add('hidden');
     $('setup-screen').classList.add('active');
   });
 
   // Restart
   async function restartGame() {
     $('gameover-overlay').classList.add('hidden');
+    $('human-win-overlay').classList.add('hidden');
+    
+    // Save previous winner for next game's first turn
+    if (G.winners && G.winners.length > 0) {
+      G.previousWinnerIdx = G.winners[0];
+    }
+    G.isFirstGame = false;
     
     // Clear the board visually before dealing
     $('player-hand').innerHTML = '';
@@ -1389,6 +1530,11 @@ function setupListeners() {
     initGame();
     await showDealAnimation();
     renderGame();
+    
+    // Only do 3-dump on first game; next games start with previous winner
+    if (G.isFirstGame) {
+      await performThreeDump();
+    }
     scheduleTurn();
   }
 
@@ -1413,6 +1559,16 @@ function setupListeners() {
 document.addEventListener('DOMContentLoaded', () => {
   G.numPlayers = 4;
   G.numDecks   = 1;
+  G.difficulty = 'normal';
   updateSettingInfo();
   setupListeners();
+
+  // Difficulty selector
+  $('difficulty-selector').addEventListener('click', e => {
+    const btn = e.target.closest('.diff-btn');
+    if (!btn) return;
+    document.querySelectorAll('.diff-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    G.difficulty = btn.dataset.diff;
+  });
 });
