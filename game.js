@@ -81,8 +81,8 @@ function detectPattern(cards) {
       return { type:'BLACK_JOKER_BOMB', cards: sorted };
   }
 
-  /* ---- Regular Bomb (4 of same rank, no jokers) ---- */
-  if (n === 4 && cards.every(c => !c.isJoker && c.rank === cards[0].rank))
+  /* ---- Regular Bomb (4 of same rank, including jokers if not caught above) ---- */
+  if (n === 4 && cards.every(c => c.value === cards[0].value))
     return { type:'BOMB', value: cards[0].value, cards: sorted };
 
   /* ---- Single ---- */
@@ -91,11 +91,11 @@ function detectPattern(cards) {
              jokerColor: cards[0].jokerColor, cards: sorted };
 
   /* ---- Double ---- */
-  if (n === 2 && cards.every(c => !c.isJoker) && cards[0].rank === cards[1].rank)
+  if (n === 2 && cards[0].value === cards[1].value)
     return { type:'DOUBLE', value: cards[0].value, cards: sorted };
 
   /* ---- Double Triple ---- */
-  if (n === 6 && cards.every(c => !c.isJoker)) {
+  if (n === 6) {
     const vals = sorted.map(c => c.value);
     const unique = [...new Set(vals)];
     if (unique.length === 2) {
@@ -109,7 +109,7 @@ function detectPattern(cards) {
   }
 
   /* ---- Double Straight ---- */
-  if (n >= 10 && n % 2 === 0 && cards.every(c => !c.isJoker && c.rank !== '2')) {
+  if (n >= 10 && n % 2 === 0) {
     const vals = sorted.map(c => c.value);
     let isPairs = true;
     const pairs = [];
@@ -129,7 +129,7 @@ function detectPattern(cards) {
   }
 
   /* ---- Kawal (Full House 3+2) ---- */
-  if (n === 5 && cards.every(c => !c.isJoker)) {
+  if (n === 5) {
     const cnt = {};
     cards.forEach(c => cnt[c.value] = (cnt[c.value] || 0) + 1);
     const entries = Object.entries(cnt);
@@ -141,8 +141,8 @@ function detectPattern(cards) {
     }
   }
 
-  /* ---- Straight (≥5 consecutive, no 2 / joker) ---- */
-  if (n >= 5 && cards.every(c => !c.isJoker && c.rank !== '2')) {
+  /* ---- Straight (≥5 consecutive) ---- */
+  if (n >= 5) {
     const vals = sorted.map(c => c.value);
     const unique = [...new Set(vals)].sort((a, b) => a - b);
     if (unique.length === n) {
@@ -178,12 +178,14 @@ function canBeat(np, ep) {
     return false;                                  // RJB already handled
   }
 
-  // Existing is a single Joker → higher single OR any bomb
-  if (ep.type === 'SINGLE' && ep.isJoker) {
-    if (np.type === 'SINGLE') return np.value > ep.value;
-    if (np.type === 'BOMB' || np.type === 'BLACK_JOKER_BOMB' || np.type === 'RED_JOKER_BOMB')
-      return true;
-    return false;
+  // A BOMB can beat a NON-BOMB pattern ONLY IF the non-bomb pattern is a Single Joker or a Double Joker
+  if (ep.type !== 'BOMB' && ep.type !== 'BLACK_JOKER_BOMB' && ep.type !== 'RED_JOKER_BOMB') {
+    if (np.type === 'BOMB' || np.type === 'BLACK_JOKER_BOMB' || np.type === 'RED_JOKER_BOMB') {
+      const isSingleJoker = ep.type === 'SINGLE' && ep.value >= 13;
+      const isDoubleJoker = ep.type === 'DOUBLE' && ep.value >= 13;
+      if (isSingleJoker || isDoubleJoker) return true;
+      return false;
+    }
   }
 
   // Normal pattern — must match type
@@ -377,7 +379,7 @@ function groupByValue(cards) {
 }
 
 function findStraightsOfLength(hand, len) {
-  const elig = hand.filter(c => !c.isJoker && c.rank !== '2');
+  const elig = hand;
   const byVal = {};
   elig.forEach(c => { if (!byVal[c.value]) byVal[c.value] = []; byVal[c.value].push(c); });
   const vals = Object.keys(byVal).map(Number).sort((a, b) => a - b);
@@ -396,7 +398,7 @@ function findStraightsOfLength(hand, len) {
 }
 
 function findAllStraights(hand) {
-  const elig = hand.filter(c => !c.isJoker && c.rank !== '2');
+  const elig = hand;
   const byVal = {};
   elig.forEach(c => { if (!byVal[c.value]) byVal[c.value] = []; byVal[c.value].push(c); });
   const vals = Object.keys(byVal).map(Number).sort((a, b) => a - b);
@@ -422,8 +424,7 @@ function findAllStraights(hand) {
 }
 
 function findAllKawals(hand) {
-  const nonJ = hand.filter(c => !c.isJoker);
-  const groups = groupByValue(nonJ);
+  const groups = groupByValue(hand);
   const triples = groups.filter(([, cs]) => cs.length >= 3);
   const pairs   = groups.filter(([, cs]) => cs.length >= 2);
   const res = [];
@@ -437,8 +438,7 @@ function findAllKawals(hand) {
 }
 
 function findAllDoubleTriples(hand) {
-  const nonJ = hand.filter(c => !c.isJoker);
-  const groups = groupByValue(nonJ);
+  const groups = groupByValue(hand);
   const triples = groups.filter(([, cs]) => cs.length >= 3);
   const res = [];
   for (let i = 0; i < triples.length; i++) {
@@ -450,7 +450,7 @@ function findAllDoubleTriples(hand) {
 }
 
 function findDoubleStraightsOfLength(hand, numPairs) {
-  const elig = hand.filter(c => !c.isJoker && c.rank !== '2');
+  const elig = hand;
   const byVal = {};
   elig.forEach(c => { if (!byVal[c.value]) byVal[c.value] = []; byVal[c.value].push(c); });
   
@@ -475,7 +475,7 @@ function findDoubleStraightsOfLength(hand, numPairs) {
 }
 
 function findAllDoubleStraights(hand) {
-  const elig = hand.filter(c => !c.isJoker && c.rank !== '2');
+  const elig = hand;
   const byVal = {};
   elig.forEach(c => { if (!byVal[c.value]) byVal[c.value] = []; byVal[c.value].push(c); });
   
@@ -517,8 +517,7 @@ function aiOpeningPlay(hand) {
       return [...hand];
   }
 
-  const nonJ   = hand.filter(c => !c.isJoker);
-  const groups  = groupByValue(nonJ);
+  const groups  = groupByValue(hand);
   const r = Math.random();
   const diff = G.difficulty; // easy | normal | hard
 
@@ -571,8 +570,7 @@ function aiOpeningPlay(hand) {
     }
   }
 
-  // Default: lowest single (prefer non-joker)
-  if (nonJ.length > 0) return [nonJ[0]];
+  // Default: lowest single
   return [hand[0]];
 }
 
@@ -586,15 +584,11 @@ function aiResponsePlay(hand, ep) {
     for (const c of hand) {
       if (c.value > ep.value) validPlays.push([c]);
     }
-    // if existing is a Joker, also try bombs
-    if (ep.isJoker) {
-      _addBombPlays(hand, validPlays);
-    }
   }
 
   /* -- DOUBLE -- */
   else if (ep.type === 'DOUBLE') {
-    const groups = groupByValue(hand.filter(c => !c.isJoker));
+    const groups = groupByValue(hand);
     for (const [, cs] of groups)
       if (cs.length >= 2 && cs[0].value > ep.value)
         validPlays.push(cs.slice(0, 2));
@@ -639,7 +633,7 @@ function aiResponsePlay(hand, ep) {
 
   /* -- BOMB (in bomb battle) -- */
   else if (ep.type === 'BOMB') {
-    const groups = groupByValue(hand.filter(c => !c.isJoker));
+    const groups = groupByValue(hand);
     for (const [, cs] of groups)
       if (cs.length >= 4 && cs[0].value > ep.value)
         validPlays.push(cs.slice(0, 4));
@@ -653,12 +647,24 @@ function aiResponsePlay(hand, ep) {
     if (rj.length >= 4) validPlays.push(rj.slice(0, 4));
   }
 
+  // If existing pattern is NOT a bomb, AI can ONLY try using a bomb if the pattern is Single/Double Joker!
+  if (ep.type !== 'BOMB' && ep.type !== 'BLACK_JOKER_BOMB' && ep.type !== 'RED_JOKER_BOMB') {
+    const isSingleJoker = ep.type === 'SINGLE' && ep.value >= 13;
+    const isDoubleJoker = ep.type === 'DOUBLE' && ep.value >= 13;
+    if (isSingleJoker || isDoubleJoker) {
+      _addBombPlays(hand, validPlays);
+    }
+  }
+
   if (validPlays.length === 0) return null;
 
-  // Pick cheapest (lowest total value)
+  // Pick cheapest (lowest total value). Penalize bombs heavily so they are played as a last resort.
   validPlays.sort((a, b) => {
-    const sa = a.reduce((s, c) => s + c.value, 0);
-    const sb = b.reduce((s, c) => s + c.value, 0);
+    const isBombA = (a.length >= 4 && detectPattern(a)?.type.includes('BOMB'));
+    const isBombB = (b.length >= 4 && detectPattern(b)?.type.includes('BOMB'));
+    
+    const sa = a.reduce((s, c) => s + c.value, 0) + (isBombA ? 1000 : 0);
+    const sb = b.reduce((s, c) => s + c.value, 0) + (isBombB ? 1000 : 0);
     return sa - sb;
   });
 
@@ -677,7 +683,7 @@ function aiResponsePlay(hand, ep) {
 }
 
 function _addBombPlays(hand, out) {
-  const groups = groupByValue(hand.filter(c => !c.isJoker));
+  const groups = groupByValue(hand);
   for (const [, cs] of groups)
     if (cs.length >= 4) out.push(cs.slice(0, 4));
   _addJokerBombPlays(hand, out);
