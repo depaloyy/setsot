@@ -507,7 +507,7 @@ function findAllDoubleStraights(hand) {
 function aiOpeningPlay(hand) {
   if (hand.length === 0) return null;
 
-  // If only 1 card, play it (single is always valid as opener unless it's... always valid)
+  // If only 1 card, play it
   if (hand.length === 1) return [hand[0]];
 
   // If 2 cards and they form a valid non-bomb pattern, play them
@@ -517,60 +517,84 @@ function aiOpeningPlay(hand) {
       return [...hand];
   }
 
-  const groups  = groupByValue(hand);
-  const r = Math.random();
-  const diff = G.difficulty; // easy | normal | hard
+  const diff = G.difficulty;
+  const groups = groupByValue(hand);
 
-  // Hard: higher chance for big combos; Easy: mostly singles/pairs
-  const pDoubleStraight = diff === 'hard' ? 0.25 : diff === 'easy' ? 0.05 : 0.15;
-  const pStraight       = diff === 'hard' ? 0.40 : diff === 'easy' ? 0.10 : 0.25;
-  const pDoubleTriple   = diff === 'hard' ? 0.50 : diff === 'easy' ? 0.15 : 0.35;
-  const pKawal          = diff === 'hard' ? 0.60 : diff === 'easy' ? 0.20 : 0.45;
-  const pPair           = diff === 'hard' ? 0.80 : diff === 'easy' ? 0.85 : 0.65;
+  /* ===== EASY: bot sangat bodoh, selalu main kartu kecil satu-satu ===== */
+  if (diff === 'easy') {
+    // 90% main kartu terendah satu-satu (buang perlahan)
+    if (Math.random() < 0.90) return [hand[0]];
+    // 10% coba pair terendah saja
+    for (const [, cs] of groups) {
+      if (cs.length >= 2 && cs[0].value <= 6) return cs.slice(0, 2);
+    }
+    return [hand[0]];
+  }
 
-  if (r < pDoubleStraight) {
+  /* ===== HARD: bot super cerdas, habiskan kartu secepat mungkin ===== */
+  if (diff === 'hard') {
+    // Prioritas: combo terbesar dulu agar kartu cepat habis
+    // 1. Double Straight (buang 10+ kartu sekaligus)
     const ds = findAllDoubleStraights(hand);
     if (ds.length > 0) {
-      ds.sort((a, b) => a[0].value - b[0].value);
+      ds.sort((a, b) => b.length - a.length || a[0].value - b[0].value);
       return ds[0];
     }
-  }
-
-  if (r < pStraight) {
+    // 2. Straight (buang 5+ kartu)
     const ss = findAllStraights(hand);
     if (ss.length > 0) {
-      ss.sort((a, b) => a[0].value - b[0].value);
+      ss.sort((a, b) => b.length - a.length || a[0].value - b[0].value);
       return ss[0];
     }
-  }
-
-  if (r < pDoubleTriple) {
+    // 3. Double Triple (buang 6 kartu)
     const dt = findAllDoubleTriples(hand);
     if (dt.length > 0) {
-       dt.sort((a, b) => Math.max(a[0].value, a[3].value) - Math.max(b[0].value, b[3].value));
-       return dt[0];
+      dt.sort((a, b) => Math.max(a[0].value, a[3].value) - Math.max(b[0].value, b[3].value));
+      return dt[0];
     }
-  }
-
-  if (r < pKawal) {
+    // 4. Kawal (buang 5 kartu)
     const kw = findAllKawals(hand);
     if (kw.length > 0) {
-      kw.sort((a, b) => {
-        const sa = a.reduce((s, c) => s + c.value, 0);
-        const sb = b.reduce((s, c) => s + c.value, 0);
-        return sa - sb;
-      });
+      kw.sort((a, b) => a.reduce((s, c) => s + c.value, 0) - b.reduce((s, c) => s + c.value, 0));
+      return kw[0];
+    }
+    // 5. Pair paling rendah
+    for (const [, cs] of groups) {
+      if (cs.length >= 2) return cs.slice(0, 2);
+    }
+    // 6. Single terendah
+    return [hand[0]];
+  }
+
+  /* ===== NORMAL: balanced random ===== */
+  const r = Math.random();
+  if (r < 0.15) {
+    const ds = findAllDoubleStraights(hand);
+    if (ds.length > 0) { ds.sort((a, b) => a[0].value - b[0].value); return ds[0]; }
+  }
+  if (r < 0.25) {
+    const ss = findAllStraights(hand);
+    if (ss.length > 0) { ss.sort((a, b) => a[0].value - b[0].value); return ss[0]; }
+  }
+  if (r < 0.35) {
+    const dt = findAllDoubleTriples(hand);
+    if (dt.length > 0) {
+      dt.sort((a, b) => Math.max(a[0].value, a[3].value) - Math.max(b[0].value, b[3].value));
+      return dt[0];
+    }
+  }
+  if (r < 0.45) {
+    const kw = findAllKawals(hand);
+    if (kw.length > 0) {
+      kw.sort((a, b) => a.reduce((s,c) => s+c.value, 0) - b.reduce((s,c) => s+c.value, 0));
       return kw[0];
     }
   }
-
-  if (r < pPair) {
+  if (r < 0.65) {
     for (const [, cs] of groups) {
       if (cs.length === 2 && cs[0].value <= 9) return cs.slice(0, 2);
     }
   }
-
-  // Default: lowest single
   return [hand[0]];
 }
 
@@ -668,17 +692,26 @@ function aiResponsePlay(hand, ep) {
     return sa - sb;
   });
 
-  // AI strategic pass based on difficulty
+  // AI strategic pass / selection based on difficulty
+  const diff = G.difficulty;
   const best = validPlays[0];
-  const avgVal = best.reduce((s, c) => s + c.value, 0) / best.length;
-  const passChance = G.difficulty === 'hard' ? 0.40 : G.difficulty === 'easy' ? 0.10 : 0.30;
-  if (avgVal >= 12 && hand.length > 4 && Math.random() < passChance) return null;
 
-  // Hard: pick smartest play (save high cards); Easy: pick random
-  if (G.difficulty === 'easy' && validPlays.length > 1) {
-    return validPlays[Math.floor(Math.random() * validPlays.length)];
+  if (diff === 'easy') {
+    // Easy: 60% pass walau bisa main → bot lambat habiskan kartu
+    if (hand.length > 2 && Math.random() < 0.60) return null;
+    // Saat main, pilih kartu paling mahal (buang kartu bagus, simpan jelek)
+    return validPlays[validPlays.length - 1];
   }
 
+  if (diff === 'hard') {
+    // Hard: SELALU main jika bisa, pilih paling efisien (cheapest)
+    // Jangan pernah pass — dominasi total
+    return best;
+  }
+
+  // Normal: 30% pass kalau cuma punya kartu tinggi
+  const avgVal = best.reduce((s, c) => s + c.value, 0) / best.length;
+  if (avgVal >= 12 && hand.length > 4 && Math.random() < 0.30) return null;
   return best;
 }
 
@@ -842,17 +875,20 @@ function scheduleTurn() {
   const p = G.players[G.currentIdx];
   if (!p.isHuman) {
     G.busy = true;
+    G.selectedIds.clear(); // clear any stale human selections during bot turn
     updateButtons();
+    renderPlayerHand(); // re-render so cards are non-selectable during bot turn
     $('game-status').innerHTML = `Giliran: ${p.name} <span class="thinking">Memilih kartu</span>`;
-    const delay = 1500 + Math.floor(Math.random() * 1500); // 1.5s to 3.0s delay
+    const aiDelay = 1500 + Math.floor(Math.random() * 1500);
     
     if (aiTimeoutId) clearTimeout(aiTimeoutId);
     aiTimeoutId = setTimeout(() => {
       G.busy = false;
       performAITurn();
-    }, delay);
+    }, aiDelay);
   } else {
     G.busy = false;
+    G.selectedIds.clear(); // fresh selection each turn
     updateButtons();
     
     // Play "Your Turn" animation
@@ -1126,6 +1162,12 @@ function updateButtons() {
   btnPass.disabled = !(isMyTurn && hasCurrent);
 }
 
+/* --- Card rank label helper (safe for jokers) --- */
+function cardRankLabel(card) {
+  if (card.isJoker) return card.jokerColor === 'red' ? 'JkR' : 'JkH';
+  return card.rank;
+}
+
 /* --- Pattern label --- */
 function patternLabel(pattern, cards) {
   if (!pattern) return '';
@@ -1135,23 +1177,28 @@ function patternLabel(pattern, cards) {
       if (c.isJoker) return `Single ${c.jokerColor === 'red' ? 'Joker Merah ★' : 'Joker Hitam ★'}`;
       return `Single ${c.rank}${c.suit}`;
     }
-    case 'DOUBLE':
-      return `Double ${cards[0].rank}`;
+    case 'DOUBLE': {
+      const c = cards[0];
+      if (c.isJoker) return `Double ${c.jokerColor === 'red' ? 'Joker Merah' : 'Joker Hitam'}`;
+      return `Double ${c.rank}`;
+    }
     case 'DOUBLE_TRIPLE': {
-      const ranks = [...new Set(cards.map(c => c.rank))];
+      const ranks = [...new Set(cards.map(c => cardRankLabel(c)))];
       return `Double Triple ${ranks[0]} & ${ranks[1]}`;
     }
     case 'DOUBLE_STRAIGHT':
       return `Seri Double ${cards.length / 2} pasang`;
     case 'STRAIGHT':
-      return `Seri ${cards.map(c => c.rank).join('-')}`;
+      return `Seri ${cards.map(c => cardRankLabel(c)).join('-')}`;
     case 'KAWAL': {
-      const triRank = cards.find(c => c.value === pattern.tripleValue).rank;
-      const pairRank = cards.find(c => c.value === pattern.pairValue).rank;
-      return `Kawal ${triRank}×3 + ${pairRank}×2`;
+      const triCard = cards.find(c => c.value === pattern.tripleValue);
+      const pairCard = cards.find(c => c.value === pattern.pairValue);
+      return `Kawal ${cardRankLabel(triCard)}×3 + ${cardRankLabel(pairCard)}×2`;
     }
-    case 'BOMB':
-      return `💣 Bom ${cards[0].rank}×4`;
+    case 'BOMB': {
+      const c = cards[0];
+      return `💣 Bom ${cardRankLabel(c)}×4`;
+    }
     case 'BLACK_JOKER_BOMB':
       return '💣💣 Bom Joker Hitam!';
     case 'RED_JOKER_BOMB':
